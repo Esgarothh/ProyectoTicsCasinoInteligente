@@ -24,23 +24,41 @@
 #endif
 
 //pins:
-const int HX711_dout = 4; //mcu > HX711 dout pin
-const int HX711_sck = 5; //mcu > HX711 sck pin
+const int HX711_dout = 2; //mcu > HX711 dout pin
+const int HX711_sck = 3; //mcu > HX711 sck pin
 
 //HX711 constructor:
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
 
 const int calVal_eepromAdress = 0;
 unsigned long t = 0;
+float sumador = 0;
+int cantidad = 0;
+int promAnterior = 0;
+int pesoSacado = 0;
+int comidaActual = 0;
+int comidaInicial = 0;
+boolean llenar = false;
+char incoming;
+boolean procesoCompra = true; 
+boolean solicitud = true;
+
+int contador_luces = 0;
 
 void setup() {
-  Serial.begin(57600); delay(10);
+  
+  pinMode(13, OUTPUT); //luz azul
+  pinMode(7, OUTPUT); //luz roja 1
+  pinMode(8, OUTPUT); //luz amarilla 1
+  pinMode(9, OUTPUT); //luz amarilla 2
+  pinMode(10, OUTPUT); //luz amarilla 3
+  Serial.begin(19200); delay(10);
   Serial.println();
   Serial.println("Starting...");
 
   LoadCell.begin();
   //LoadCell.setReverseOutput(); //uncomment to turn a negative output value to positive
-  unsigned long stabilizingtime = 2000; // preciscion right after power-up can be improved by adding a few seconds of stabilizing time
+  unsigned long stabilizingtime = 5000; // preciscion right after power-up can be improved by adding a few seconds of stabilizing time
   boolean _tare = true; //set this to false if you don't want tare to be performed in the next step
   LoadCell.start(stabilizingtime, _tare);
   if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
@@ -55,38 +73,147 @@ void setup() {
   calibrate(); //start calibration procedure
 }
 
+
 void loop() {
+
+  boolean loopbool = false;
   static boolean newDataReady = 0;
   const int serialPrintInterval = 0; //increase value to slow down serial print activity
-
   // check for new data/start next conversion:
-  if (LoadCell.update()) newDataReady = true;
+   
+  if(llenar == false){
+  Serial.println("Coloque el alimento en la bandeja ('k' una vez listo):");
+  while (loopbool == false) { //llenar bandeja
+    if (Serial.available() > 0) {
+      char aux = Serial.read(); 
+      if (aux == 'k') {
+        LoadCell.refreshDataSet();
+        comidaActual = LoadCell.getData();
+        comidaInicial = comidaActual;
+        Serial.print("Peso ingresado: ");
+        Serial.println(comidaInicial);
+        loopbool = true;
+        llenar = true;
+      }
+    }
+  }
+    }
+  
+  if(Serial.available() > 0) {
+    //serial.println("leer algo -arduino");
+    char incoming = Serial.read();
+    Serial.println(incoming);
+  
+  if(incoming == 'a') {
+    luz_led_compra(true);
+    Serial.println("confirmacion");
+      }
+  else if(incoming == 'b'){
+    Serial.println("confirmacion");
+    luz_led_compra(false);
+      }
+  else{
+    incoming='c';
+  }
+  
+  }
 
+
+  
+   if (LoadCell.update()) newDataReady = true;
+  bool h = false;
   // get smoothed value from the dataset:
   if (newDataReady) {
     if (millis() > t + serialPrintInterval) {
       float i = LoadCell.getData();
-      Serial.print("Load_cell output val: ");
-      Serial.println(i);
+      
+      sumador = sumador + i;
+      cantidad = cantidad + 1;
+      if (cantidad > 10){
+
+        promAnterior = sumador/cantidad;
+        sumador =0;
+        cantidad = 0;
+        if(solicitud){
+        Serial.print("Load_cell output val: ");
+        Serial.println(promAnterior);
+        }
+        h = true;
+      }
+
+        
+        if(h)
+        {                   
+          int aux = comidaActual - promAnterior;
+          if((aux)>=50){ //faltan 100
+            pesoSacado += aux;
+            comidaActual -= aux;
+            contador_luces++;
+          }
+          else if(aux <= -50){ //se regreso
+            pesoSacado -= aux;
+            comidaActual += (aux*-1);
+            contador_luces--;
+          }
+        
+        luz_estados_compra(contador_luces);
+        
+        Serial.print("ComidaInicial: ");
+        Serial.println(comidaInicial);
+        Serial.print("promAnterior: ");
+        Serial.println(promAnterior);
+        Serial.print("pesoSacado: ");
+        Serial.println(pesoSacado);
+        Serial.print("comidaActual: ");
+        Serial.println(comidaActual);
+        h = false;
+        }
+
+        
       newDataReady = 0;
       t = millis();
     }
   }
 
   // receive command from serial terminal
-  if (Serial.available() > 0) {
-    char inByte = Serial.read();
-    if (inByte == 't') LoadCell.tareNoDelay(); //tare
-    else if (inByte == 'r') calibrate(); //calibrate
-    else if (inByte == 'c') changeSavedCalFactor(); //edit calibration value manually
-  }
-
-  // check if last tare operation is complete
-  if (LoadCell.getTareStatus() == true) {
-    Serial.println("Tare complete");
-  }
+ 
 
 }
+
+void luz_led_compra(boolean a){
+  if(a){
+    digitalWrite(13, HIGH);    
+        }
+  else{
+    digitalWrite(13, LOW);   
+  }
+}
+
+
+void luz_estados_compra(int cant){
+  
+  if(cant == 3){
+    digitalWrite(8, HIGH);
+    digitalWrite(9, HIGH);
+    digitalWrite(10, HIGH);    
+        }
+  if(cant == 2){
+    digitalWrite(8, HIGH);
+    digitalWrite(9, HIGH);
+    digitalWrite(10, LOW);    
+        }
+  if(cant == 1){
+    digitalWrite(8, HIGH);
+    digitalWrite(9, LOW);
+    digitalWrite(10, LOW);    
+        }
+  if(cant == 0){
+    digitalWrite(8, LOW);
+    digitalWrite(9, LOW);
+    digitalWrite(10, LOW);    
+        }
+  
+  }
 
 void calibrate() {
   Serial.println("***");
@@ -132,7 +259,6 @@ void calibrate() {
 
   Serial.print("New calibration value has been set to: ");
   Serial.print(newCalibrationValue);
-  Serial.println(", use this as calibration value (calFactor) in your project sketch.");
   Serial.print("Save this value to EEPROM adress ");
   Serial.print(calVal_eepromAdress);
   Serial.println("? y/n");
@@ -166,9 +292,7 @@ void calibrate() {
 
   Serial.println("End calibration");
   Serial.println("***");
-  Serial.println("To re-calibrate, send 'r' from serial monitor.");
-  Serial.println("For manual edit of the calibration value, send 'c' from serial monitor.");
-  Serial.println("***");
+  Serial.println("FINAL");
 }
 
 void changeSavedCalFactor() {
